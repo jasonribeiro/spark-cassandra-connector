@@ -1,16 +1,18 @@
 package com.datastax.spark.connector.cql
 
+import java.io.IOException
+
 import com.datastax.spark.connector._
-import com.datastax.spark.connector.mapper.{DataFrameColumnMapper, ColumnMapper}
+import com.datastax.spark.connector.mapper.{ColumnMapper, DataFrameColumnMapper}
 import org.apache.spark.Logging
 import org.apache.spark.sql.DataFrame
 
 import scala.collection.JavaConversions._
 import scala.language.existentials
 import scala.util.{Properties, Try}
-
 import com.datastax.driver.core._
-import com.datastax.spark.connector.types.{CounterType, ColumnType}
+import com.datastax.spark.connector.types.{ColumnType, CounterType}
+import com.datastax.spark.connector.util.NameTools
 import com.datastax.spark.connector.util.Quote._
 
 /** Abstract column / field definition.
@@ -250,6 +252,7 @@ object Schema extends Logging {
   }
 
   /** Fetches database schema from Cassandra. Provides access to keyspace, table and column metadata.
+    *
     * @param keyspaceName if defined, fetches only metadata of the given keyspace
     * @param tableName if defined, fetches only metadata of the given table
     */
@@ -320,5 +323,33 @@ object Schema extends Logging {
         s"${keyspaces.map(_.keyspaceName).mkString("{", ",", "}")}")
       Schema(clusterName, keyspaces)
     }
+  }
+
+
+  /**
+    * Fetches a TableDef for a particular Cassandra Table, waits one second on misses
+    * for the Java Driver Debounce. This gives the driver a chance to get recent schema
+    * modifications. Throw an exception with name options if the table is not found.
+    */
+  def tableFromCassandra(
+    connector: CassandraConnector,
+    keyspaceName: String,
+    tableName: String,
+    retry: Boolean = true): TableDef = {
+    val JAVA_DEBOUNCE_MS = 1000
+
+    fromCassandra(connector, Some(keyspaceName), Some(tableName)).tables.headOption match {
+      case Some(t) => t
+      case None =>
+        if (retry) {
+          Thread.sleep(JAVA_DEBOUNCE_MS)
+          tableFromCassandra(connector, keyspaceName, tableName, false)
+        } else {
+          val metadata: Metadata = connector.withClusterDo(_.getMetadata)
+          val suggestions = NameTools.getSuggestions(metadata, keyspaceName, tableName)
+          val errorMessage = NameTools.getErrorString(keyspaceName, tableName, suggestions)
+          throw new IOException(errorMessage)
+        }
+      }
   }
 }
