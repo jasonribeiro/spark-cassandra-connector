@@ -327,29 +327,21 @@ object Schema extends Logging {
 
 
   /**
-    * Fetches a TableDef for a particular Cassandra Table, waits one second on misses
-    * for the Java Driver Debounce. This gives the driver a chance to get recent schema
-    * modifications. Throw an exception with name options if the table is not found.
+    * Fetches a TableDef for a particular Cassandra Table throws an
+    * exception with name options if the table is not found.
     */
   def tableFromCassandra(
     connector: CassandraConnector,
     keyspaceName: String,
-    tableName: String,
-    retry: Boolean = true): TableDef = {
-    val JAVA_DEBOUNCE_MS = 1000
+    tableName: String): TableDef = {
 
     fromCassandra(connector, Some(keyspaceName), Some(tableName)).tables.headOption match {
       case Some(t) => t
       case None =>
-        if (retry) {
-          Thread.sleep(JAVA_DEBOUNCE_MS)
-          tableFromCassandra(connector, keyspaceName, tableName, false)
-        } else {
-          val metadata: Metadata = connector.withClusterDo(_.getMetadata)
-          val suggestions = NameTools.getSuggestions(metadata, keyspaceName, tableName)
-          val errorMessage = NameTools.getErrorString(keyspaceName, tableName, suggestions)
-          throw new IOException(errorMessage)
-        }
+        val metadata: Metadata = connector.withClusterDo(_.getMetadata)
+        val suggestions = NameTools.getSuggestions(metadata, keyspaceName, tableName)
+        val errorMessage = NameTools.getErrorString(keyspaceName, tableName, suggestions)
+        throw new IOException(errorMessage)
       }
-  }
+    }
 }
